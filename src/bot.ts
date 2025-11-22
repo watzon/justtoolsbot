@@ -2,7 +2,9 @@ import { Bot } from "grammy";
 import { config } from "./config";
 import type { MyContext } from "./types";
 import { logger } from "./middleware/logger";
-import { startCommand } from "./commands/start";
+import { registerCommands } from "./commands";
+import { registerHandlers } from "./handlers";
+
 
 export function createBot() {
     if (!config.botToken) {
@@ -15,9 +17,10 @@ export function createBot() {
     bot.use(logger);
 
     // Commands
-    bot.command("start", startCommand);
+    registerCommands(bot);
 
-    bot.on("message", (ctx) => ctx.reply("I received your message!"));
+    // Handlers
+    registerHandlers(bot);
 
     return bot;
 }

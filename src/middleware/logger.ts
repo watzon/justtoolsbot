@@ -1,7 +1,7 @@
 import type { NextFunction } from "grammy";
 import type { MyContext } from "../types";
 
-export async function logger(ctx: MyContext, next: NextFunction) {
+export async function logger(_ctx: MyContext, next: NextFunction) {
     const start = Date.now();
     await next();
     const ms = Date.now() - start;
