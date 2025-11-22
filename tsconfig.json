@@ -25,7 +25,6 @@
         "types": [
             "bun-types"
         ],
-        "baseUrl": "./src",
         "paths": {
             "@/*": [
                 "./*"

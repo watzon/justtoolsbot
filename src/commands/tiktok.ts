@@ -1,6 +1,5 @@
 import { InlineKeyboard, InputFile } from "grammy";
-// @ts-ignore - Package uses CommonJS exports
-import tiktokDownloader from "@tobyg74/tiktok-api-dl";
+import { downloadTikTok } from "../utils/tiktok";
 
 import type { MyContext } from "../types";
 
@@ -49,130 +48,66 @@ export async function handleTiktokDownload(ctx: MyContext) {
     try {
         await ctx.editMessageText("Fetching TikTok video...");
 
-        // Try v3 first (most reliable), fallback to v2 if needed
-        let result: { status: string; result?: unknown; message?: string };
-        let version: "v3" | "v2" = "v3";
+        const result = await downloadTikTok(url);
 
-        try {
-            result = await tiktokDownloader.Downloader(url, { version: "v3" });
-        } catch (error) {
-            console.log("v3 failed, trying v2:", error);
-            version = "v2";
-            result = await tiktokDownloader.Downloader(url, { version: "v2" });
-        }
+        if (result && result.video_url) {
+            const TELEGRAM_MAX_SIZE = 50 * 1024 * 1024; // 50MB
+            let videoUrl = result.video_url;
 
-        if (result.status === "success" && result.result) {
-            const content = result.result as {
-                type: string;
-                author?: { nickname?: string };
-                desc?: string;
-                videoWatermark?: string;
-                videoSD?: string;
-                videoHD?: string;
-                video?: { playAddr?: string[] };
-                images?: string[];
-            };
-            const authorName = content.author?.nickname || "unknown";
+            // Prefer HD if available and within size limits (we'll check size next)
+            if (result.video_url_hd) {
+                videoUrl = result.video_url_hd;
+            }
 
-            if (content.type === "video") {
-                // Handle video download with version-specific logic and size checking
-                const TELEGRAM_MAX_SIZE = 50 * 1024 * 1024; // 50MB
-                let videoUrls: string[] = [];
+            // Check size
+            let downloadedVideo: { buffer: Uint8Array; url: string; size: number } | null = null;
 
-                if (version === "v3") {
-                    // v3 has videoHD, videoSD, videoWatermark - prioritize smallest first
-                    if (content.videoWatermark) videoUrls.push(content.videoWatermark);
-                    if (content.videoSD) videoUrls.push(content.videoSD);
-                    if (content.videoHD) videoUrls.push(content.videoHD);
-                } else {
-                    // v2 has video.playAddr array
-                    if (content.video?.playAddr) {
-                        videoUrls = [...content.video.playAddr];
-                    }
+            try {
+                await ctx.editMessageText("Checking video size...");
+
+                // Try the selected URL first
+                let response = await fetch(videoUrl, { method: 'HEAD' });
+                let contentLength = response.headers.get('content-length');
+                let fileSize = contentLength ? Number.parseInt(contentLength, 10) : 0;
+
+                // If HD is too big or unknown, try standard
+                if ((fileSize > TELEGRAM_MAX_SIZE || fileSize === 0) && result.video_url !== videoUrl) {
+                    videoUrl = result.video_url;
+                    response = await fetch(videoUrl, { method: 'HEAD' });
+                    contentLength = response.headers.get('content-length');
+                    fileSize = contentLength ? Number.parseInt(contentLength, 10) : 0;
                 }
 
-                // Try to download the smallest version first, then larger if needed
-                let downloadedVideo: { buffer: Uint8Array; url: string; size: number } | null = null;
+                // Download
+                await ctx.editMessageText("Downloading video...");
+                const fullResponse = await fetch(videoUrl);
+                const buffer = await fullResponse.arrayBuffer();
+                const bufferUint8 = new Uint8Array(buffer);
+                fileSize = bufferUint8.length;
 
-                for (const url of videoUrls) {
-                    try {
-                        await ctx.editMessageText("Checking video size...");
-
-                        const response = await fetch(url, { method: 'HEAD' });
-                        const contentLength = response.headers.get('content-length');
-
-                        if (contentLength) {
-                            const fileSize = Number.parseInt(contentLength, 10);
-                            console.log(`Video URL ${url} size: ${fileSize} bytes (${(fileSize / 1024 / 1024).toFixed(2)}MB)`);
-
-                            if (fileSize <= TELEGRAM_MAX_SIZE) {
-                                // Download the video if it's within size limit
-                                const fullResponse = await fetch(url);
-                                const buffer = await fullResponse.arrayBuffer();
-                                const bufferUint8 = new Uint8Array(buffer);
-
-                                downloadedVideo = { buffer: bufferUint8, url, size: fileSize };
-                                break; // Found a suitable video
-                            }
-                        } else {
-                            // No content-length header, try downloading anyway
-                            const fullResponse = await fetch(url);
-                            const buffer = await fullResponse.arrayBuffer();
-                            const bufferUint8 = new Uint8Array(buffer);
-                            const fileSize = bufferUint8.length;
-
-                            console.log(`Video URL ${url} downloaded size: ${fileSize} bytes (${(fileSize / 1024 / 1024).toFixed(2)}MB)`);
-
-                            if (fileSize <= TELEGRAM_MAX_SIZE) {
-                                downloadedVideo = { buffer: bufferUint8, url, size: fileSize };
-                                break;
-                            }
-                        }
-                    } catch (error) {
-                        console.log(`Failed to fetch video URL ${url}:`, error);
-                    }
+                if (fileSize <= TELEGRAM_MAX_SIZE) {
+                    downloadedVideo = { buffer: bufferUint8, url: videoUrl, size: fileSize };
                 }
 
-                if (downloadedVideo) {
-                    const caption = `🎵 ${content.desc || "TikTok video"}\n\n👤 ${authorName}\n📊 ${(downloadedVideo.size / 1024 / 1024).toFixed(1)}MB`;
+            } catch (error) {
+                console.error("Error checking/downloading video:", error);
+            }
 
-                    await ctx.replyWithVideo(new InputFile(downloadedVideo.buffer), {
-                        caption: caption.length <= 1024 ? caption : `🎵 ${content.desc || "TikTok video"}`,
-                    });
+            if (downloadedVideo) {
+                const caption = `🎵 ${result.title || "TikTok video"}\n\n👤 ${result.author || "Unknown"}\n📊 ${(downloadedVideo.size / 1024 / 1024).toFixed(1)}MB`;
 
-                    // Delete the "Fetching..." message
-                    await ctx.deleteMessage();
-                } else {
-                    await ctx.editMessageText("❌ Video too large for Telegram (max 50MB). Try with a shorter TikTok video or use a different downloader.");
-                }
-            } else if (content.type === "image" && content.images && content.images.length > 0) {
-                // Handle image carousel (multiple images)
-                const mediaGroup = [];
-
-                for (const imageUrl of content.images) {
-                    const response = await fetch(imageUrl);
-                    const buffer = await response.arrayBuffer();
-                    const bufferUint8 = new Uint8Array(buffer);
-
-                    mediaGroup.push({
-                        type: "photo" as const,
-                        media: new InputFile(bufferUint8),
-                    });
-                }
-
-                await ctx.replyWithMediaGroup(mediaGroup);
-
-                // Send caption as a separate message
-                const caption = `📸 TikTok photo set\n\n👤 ${authorName}`;
-                await ctx.reply(caption.length <= 1024 ? caption : "📸 TikTok photo set");
+                await ctx.replyWithVideo(new InputFile(downloadedVideo.buffer), {
+                    caption: caption.length <= 1024 ? caption : `🎵 ${result.title || "TikTok video"}`,
+                });
 
                 // Delete the "Fetching..." message
                 await ctx.deleteMessage();
             } else {
-                await ctx.editMessageText("Error: No media found in the TikTok.");
+                await ctx.editMessageText("❌ Video too large for Telegram (max 50MB) or could not be downloaded.");
             }
+
         } else {
-            await ctx.editMessageText(`Could not download the TikTok video: ${result.message || "Unknown error"}`);
+            await ctx.editMessageText("Could not download the TikTok video. It might be private or deleted.");
         }
 
     } catch (error) {
