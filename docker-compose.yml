@@ -1,0 +1,64 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: justtoolsbot-app
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - BOT_TOKEN=${BOT_TOKEN}
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-justtoolsbot}
+      - ADMIN_USER_IDS=${ADMIN_USER_IDS}
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - justtoolsbot-network
+
+  db:
+    image: postgres:15-alpine
+    container_name: justtoolsbot-db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-justtoolsbot}
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - justtoolsbot-network
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-justtoolsbot}",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Migration runner service (will run once and exit)
+  migrations:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: justtoolsbot-migrations
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-justtoolsbot}
+    entrypoint: ["bun"]
+    command: ["run", "db:migrate"]
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - justtoolsbot-network
+    restart: "no"
+
+volumes:
+  postgres_data:
+
+networks:
+  justtoolsbot-network:
+    driver: bridge
