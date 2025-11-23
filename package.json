@@ -21,7 +21,8 @@
         "drizzle-orm": "^0.44.7",
         "grammy": "^1.38.4",
         "instagram-url-direct": "^2.0.7",
-        "pg": "^8.16.3"
+        "pg": "^8.16.3",
+        "sharp": "^0.34.5"
     },
     "devDependencies": {
         "@biomejs/biome": "^1.9.4",

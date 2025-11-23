@@ -1,5 +1,7 @@
-import type { Bot } from "grammy";
+import { InputFile, type Bot } from "grammy";
 import type { MyContext } from "../types";
+import { emojifyImage, downloadImage } from "../utils/image";
+import { config } from "../config";
 
 interface ForwardedMessageInfo {
     originalSender: string;
@@ -154,6 +156,7 @@ function createInlineButtons(info: ForwardedMessageInfo) {
 
     if (info.messageType === "Photo") {
         buttons.push({ text: "🔍 Photo Info", callback_data: "forwarded_photo_info" });
+        buttons.push({ text: "🎨 Emojify", callback_data: "forwarded_emojify" });
     }
 
     if (info.messageType === "Video") {
@@ -203,7 +206,7 @@ function createInlineButtons(info: ForwardedMessageInfo) {
 async function handleGetJSON(ctx: MyContext) {
     await ctx.answerCallbackQuery("loading");
 
-    const msg = ctx.msg;
+    const msg = ctx.msg?.reply_to_message;
     if (!msg) {
         await ctx.reply("❌ Message not found.");
         return;
@@ -236,7 +239,7 @@ async function handleGetJSON(ctx: MyContext) {
 async function handleExtractURLs(ctx: MyContext) {
     await ctx.answerCallbackQuery("loading");
 
-    const msg = ctx.msg;
+    const msg = ctx.msg?.reply_to_message;
     if (!msg) {
         await ctx.reply("❌ Message not found.");
         return;
@@ -284,7 +287,7 @@ async function handleExtractURLs(ctx: MyContext) {
 async function handleExtractHashtags(ctx: MyContext) {
     await ctx.answerCallbackQuery("loading");
 
-    const msg = ctx.msg;
+    const msg = ctx.msg?.reply_to_message;
     if (!msg) {
         await ctx.reply("❌ Message not found.");
         return;
@@ -321,7 +324,7 @@ async function handleExtractHashtags(ctx: MyContext) {
 async function handleExtractMentions(ctx: MyContext) {
     await ctx.answerCallbackQuery("loading");
 
-    const msg = ctx.msg;
+    const msg = ctx.msg?.reply_to_message;
     if (!msg) {
         await ctx.reply("❌ Message not found.");
         return;
@@ -367,7 +370,7 @@ async function handleExtractMentions(ctx: MyContext) {
 async function handleFullAnalysis(ctx: MyContext) {
     await ctx.answerCallbackQuery("loading");
 
-    const msg = ctx.msg;
+    const msg = ctx.msg?.reply_to_message;
     if (!msg) {
         await ctx.reply("❌ Message not found.");
         return;
@@ -447,7 +450,7 @@ async function handleFullAnalysis(ctx: MyContext) {
 async function handleMediaDownload(ctx: MyContext) {
     await ctx.answerCallbackQuery("loading");
 
-    const msg = ctx.msg;
+    const msg = ctx.msg?.reply_to_message;
     if (!msg) {
         await ctx.reply("❌ Message not found.");
         return;
@@ -508,6 +511,40 @@ async function handleMediaDownload(ctx: MyContext) {
     }
 }
 
+async function handleEmojify(ctx: MyContext) {
+    await ctx.answerCallbackQuery("Emojifying...");
+
+    const msg = ctx.msg?.reply_to_message;
+    if (!msg || !msg.photo) {
+        await ctx.reply("❌ Original message or photo not found.");
+        return;
+    }
+
+    await ctx.replyWithChatAction("upload_photo");
+
+    try {
+        const photos = msg.photo;
+        const photo = photos[photos.length - 1];
+        if (!photo) throw new Error("No photo found");
+
+        const file = await ctx.api.getFile(photo.file_id);
+        if (!file.file_path) {
+            throw new Error("File path not found");
+        }
+
+        const url = `https://api.telegram.org/file/bot${config.botToken}/${file.file_path}`;
+        const imageBuffer = await downloadImage(url);
+        const emojifiedBuffer = await emojifyImage(imageBuffer);
+
+        await ctx.replyWithDocument(new InputFile(emojifiedBuffer, "emoji.webp"), {
+            reply_to_message_id: msg.message_id
+        });
+    } catch (error) {
+        console.error("Error emojifying image:", error);
+        await ctx.reply("❌ Failed to emojify image.");
+    }
+}
+
 export function forwardedMessageHandler(ctx: MyContext) {
     const info = analyzeForwardedMessage(ctx);
 
@@ -518,10 +555,13 @@ export function forwardedMessageHandler(ctx: MyContext) {
     const message = createMessageInfo(info);
     const buttons = createInlineButtons(info);
 
-    ctx.reply(message, {
-        parse_mode: "HTML",
-        ...buttons
-    });
+    if (ctx.msg) {
+        ctx.reply(message, {
+            parse_mode: "HTML",
+            reply_to_message_id: ctx.msg.message_id,
+            ...buttons
+        });
+    }
 }
 
 export function registerForwardedHandlers(bot: Bot<MyContext>) {
@@ -535,11 +575,12 @@ export function registerForwardedHandlers(bot: Bot<MyContext>) {
     bot.callbackQuery("forwarded_extract_mentions", handleExtractMentions);
     bot.callbackQuery("forwarded_full_analysis", handleFullAnalysis);
     bot.callbackQuery("forwarded_download_media", handleMediaDownload);
+    bot.callbackQuery("forwarded_emojify", handleEmojify);
 
     // Media-specific info handlers
     bot.callbackQuery("forwarded_photo_info", async (ctx) => {
         await ctx.answerCallbackQuery("loading");
-        const msg = ctx.msg;
+        const msg = ctx.msg?.reply_to_message;
         if (!msg || !msg.photo) {
             await ctx.reply("❌ No photo found in this message.");
             return;
@@ -560,7 +601,7 @@ export function registerForwardedHandlers(bot: Bot<MyContext>) {
 
     bot.callbackQuery("forwarded_video_info", async (ctx) => {
         await ctx.answerCallbackQuery("loading");
-        const msg = ctx.msg;
+        const msg = ctx.msg?.reply_to_message;
         if (!msg || !msg.video) {
             await ctx.reply("❌ No video found in this message.");
             return;
@@ -586,7 +627,7 @@ export function registerForwardedHandlers(bot: Bot<MyContext>) {
 
     bot.callbackQuery("forwarded_document_info", async (ctx) => {
         await ctx.answerCallbackQuery("loading");
-        const msg = ctx.msg;
+        const msg = ctx.msg?.reply_to_message;
         if (!msg || !msg.document) {
             await ctx.reply("❌ No document found in this message.");
             return;
